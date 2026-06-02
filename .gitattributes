@@ -1,0 +1,49 @@
+# Auto-detect text files and normalize line endings to LF on commit,
+# so the repo is consistent regardless of which OS contributors edit on.
+
+# Default for everything: LF on commit, LF on checkout
+*               text=auto eol=lf
+
+# Explicit text files (override any binary detection)
+*.md            text eol=lf
+*.txt           text eol=lf
+*.json          text eol=lf
+*.jsonc         text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+*.toml          text eol=lf
+*.html          text eol=lf
+*.css           text eol=lf
+*.scss          text eol=lf
+*.js            text eol=lf
+*.jsx           text eol=lf
+*.ts            text eol=lf
+*.tsx           text eol=lf
+*.cjs           text eol=lf
+*.mjs           text eol=lf
+*.svg           text eol=lf
+
+# Windows shell scripts need CRLF to actually run on Windows
+*.bat           text eol=crlf
+*.cmd           text eol=crlf
+*.ps1           text eol=crlf
+
+# Native binary formats — do not touch
+*.png           binary
+*.jpg           binary
+*.jpeg          binary
+*.gif           binary
+*.ico           binary
+*.webp          binary
+*.woff          binary
+*.woff2         binary
+*.ttf           binary
+*.eot           binary
+*.pdf           binary
+*.zip           binary
+*.gz            binary
+*.tar           binary
+
+# Mark the package-lock.json as generated so GitHub can suggest updates
+# (uncomment if you want Dependabot-style PRs)
+# package-lock.json linguist-generated=true
