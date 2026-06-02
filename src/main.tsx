@@ -10,6 +10,33 @@ if ('serviceWorker' in navigator) {
       .register('/sw.js')
       .then((reg) => {
         console.log('SW registered:', reg.scope);
+        // Once the SW is active, send it the list of every asset on the page
+        // so it can pre-cache them. This is what makes a cold offline refresh work.
+        const sendPrecache = () => {
+          if (!navigator.serviceWorker.controller) return;
+          const urls = [
+            ...performance.getEntriesByType('resource')
+              .map((r) => r.name)
+              .filter((u) => u.startsWith(self.location.origin)),
+          ];
+          if (urls.length > 0) {
+            navigator.serviceWorker.controller.postMessage({
+              type: 'PRECACHE_URLS',
+              urls: [...new Set(urls)],
+            });
+          }
+        };
+        if (reg.active) sendPrecache();
+        else reg.addEventListener('updatefound', () => {
+          const sw = reg.installing;
+          if (!sw) return;
+          sw.addEventListener('statechange', () => {
+            if (sw.state === 'activated') sendPrecache();
+          });
+        });
+        // Also re-send on every successful navigation, to catch lazy chunks
+        navigator.serviceWorker.addEventListener('controllerchange', sendPrecache);
+        window.addEventListener('load', sendPrecache);
       })
       .catch((err) => {
         console.log('SW registration failed:', err);
