@@ -401,11 +401,62 @@ export interface EngineCallbacks {
   onError?: (error: Error) => void;
 }
 
+/**
+ * Detect WebGPU device-lost / buffer-lost errors that the OS fires on mobile
+ * when the GPU process gets reclaimed (screen sleep, background tab, low memory).
+ * Returns a friendly user-facing message if matched, otherwise null.
+ *
+ * Examples of the raw error text we map:
+ *   - "Failed to execute 'mapAsync' on 'GPUBuffer': A failed external reference no longer exists."
+ *   - "Failed to execute 'mapAsync' on 'GPUBuffer': Buffer is unmapped before the mapping is resolved"
+ *   - "GPU device was lost" / "WebGPU device lost"
+ *   - "AbortError: Failed to execute 'mapAsync' on 'GPUBuffer'"
+ */
+export function isWebGPUDeviceLostError(err: unknown): boolean {
+  const msg = err instanceof Error ? `${err.name} ${err.message}` : String(err);
+  return (
+    /mapAsync/i.test(msg) ||
+    /GPU device was lost/i.test(msg) ||
+    /WebGPU device lost/i.test(msg) ||
+    /external reference no longer exists/i.test(msg) ||
+    /device\.lost/i.test(msg)
+  );
+}
+
+export function getWebGPUDeviceLostMessage(): string {
+  return (
+    'The GPU was reclaimed by your device (common on mobile when the tab is ' +
+    'backgrounded, the screen sleeps, or memory is low). The model was unloaded. ' +
+    'Tap the model button to reload it and try again.'
+  );
+}
+
 class LLMEngine {
   private engine: MLCEngine | null = null;
   private currentModelId: string | null = null;
   private isGenerating = false;
   private abortController: AbortController | null = null;
+  /**
+   * Listeners notified when the GPU device is lost or the engine must be
+   * re-initialized. The chat store subscribes to this to surface a friendly
+   * error and reset the model badge to "Idle".
+   */
+  private deviceLostListeners: Set<() => void> = new Set();
+
+  onDeviceLost(listener: () => void): () => void {
+    this.deviceLostListeners.add(listener);
+    return () => this.deviceLostListeners.delete(listener);
+  }
+
+  private notifyDeviceLost(): void {
+    for (const l of this.deviceLostListeners) {
+      try {
+        l();
+      } catch {
+        /* ignore listener errors */
+      }
+    }
+  }
 
   async loadModel(modelId: string, callbacks: EngineCallbacks = {}): Promise<void> {
     try {
@@ -443,6 +494,16 @@ class LLMEngine {
         context_window_size: modelInfo?.contextWindow ?? 4096,
         sliding_window_size: -1,
       });
+      // Note: web-llm@0.2.x has no appConfig.gpu hook. detectGPUDevice() inside
+      // web-llm already calls requestAdapter({ powerPreference: 'high-performance' })
+      // by default, so we don't need to (and can't) configure the adapter here.
+      //
+      // The mobile "Failed to execute 'mapAsync' on 'GPUBuffer': A failed external
+      // reference no longer exists" error is the OS reclaiming the GPU device
+      // (screen sleep, background tab, low memory). WebLLM doesn't expose a
+      // device-lost hook in this version, so we handle it in the stream/generate
+      // methods below by catching the error, unloading the dead engine, and
+      // surfacing a friendly message.
 
       this.currentModelId = modelId;
 
@@ -452,9 +513,24 @@ class LLMEngine {
         timeElapsed: 0,
       } as InitProgressReport);
     } catch (err) {
-      const error = err instanceof Error ? err : new Error(String(err));
-      callbacks.onError?.(error);
-      throw error;
+      // Normalize WebGPU device-lost errors into a friendly message instead of
+      // the raw "Failed to execute 'mapAsync' on 'GPUBuffer': A failed external
+      // reference no longer exists." error string.
+      const normalized = isWebGPUDeviceLostError(err)
+        ? new Error(getWebGPUDeviceLostMessage())
+        : err instanceof Error
+        ? err
+        : new Error(String(err));
+
+      if (isWebGPUDeviceLostError(err)) {
+        // Tear down any partially-built engine so the next load starts clean.
+        this.engine = null;
+        this.currentModelId = null;
+        this.notifyDeviceLost();
+      }
+
+      callbacks.onError?.(normalized);
+      throw normalized;
     }
   }
 
@@ -518,6 +594,21 @@ class LLMEngine {
           yield delta;
         }
       }
+    } catch (err) {
+      // The infamous mobile "Failed to execute 'mapAsync' on 'GPUBuffer': A failed
+      // external reference no longer exists." — the GPU was reclaimed by the OS.
+      // Unload the dead engine, notify listeners, and surface a friendly message
+      // instead of the raw WebGPU error.
+      if (isWebGPUDeviceLostError(err)) {
+        try {
+          await this.unloadModel();
+        } catch {
+          /* ignore */
+        }
+        this.notifyDeviceLost();
+        throw new Error(getWebGPUDeviceLostMessage());
+      }
+      throw err;
     } finally {
       this.isGenerating = false;
       this.abortController = null;
@@ -562,6 +653,17 @@ class LLMEngine {
       });
 
       return response.choices[0]?.message?.content ?? '';
+    } catch (err) {
+      if (isWebGPUDeviceLostError(err)) {
+        try {
+          await this.unloadModel();
+        } catch {
+          /* ignore */
+        }
+        this.notifyDeviceLost();
+        throw new Error(getWebGPUDeviceLostMessage());
+      }
+      throw err;
     } finally {
       this.isGenerating = false;
       this.abortController = null;

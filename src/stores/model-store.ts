@@ -104,3 +104,19 @@ export const useModelStore = create<ModelStore>((set, get) => ({
     });
   },
 }));
+
+// When the WebGPU device is reclaimed (mobile background, screen sleep, OOM),
+// reset the model badge to "Idle" so the user can see the model is no longer
+// loaded and reload it. This is wired up here (outside the store factory) so
+// we have a single subscription that survives StrictMode double-invoke.
+if (typeof window !== 'undefined') {
+  llmEngine.onDeviceLost(() => {
+    const state = useModelStore.getState();
+    state.setLoadState({
+      status: 'idle',
+      progress: 0,
+      progressText: '',
+      // Keep last selectedModel so the UI can show "Tap to reload".
+    });
+  });
+}

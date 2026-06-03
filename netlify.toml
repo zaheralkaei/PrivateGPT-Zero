@@ -1,0 +1,47 @@
+# Netlify config for PrivateGPT Zero
+# - SPA fallback so /chat/123 rewrites to /index.html
+# - Long-lived immutable caching for /assets/* (Vite content-hashed bundles)
+# - No-cache for HTML so users always get the latest app shell
+# - Cross-origin isolation headers for WebGPU stability on mobile
+
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "no-cache, no-store, must-revalidate"
+    # Cross-origin isolation. Some Android Chrome WebGPU paths (and a class of
+    # "external reference no longer exists" errors) are more stable when the
+    # page is cross-origin-isolated. credentialless is the safe choice because
+    # the model-weight CDN (huggingface / mlc-ai) may not send CORP.
+    Cross-Origin-Opener-Policy = "same-origin"
+    Cross-Origin-Embedder-Policy = "credentialless"
+    Cross-Origin-Resource-Policy = "cross-origin"
+    X-Content-Type-Options = "nosniff"
+
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    # Service workers MUST be served without caching quirks
+    Cache-Control = "no-cache, no-store, must-revalidate"
+    Service-Worker-Allowed = "/"
+
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+    Cross-Origin-Resource-Policy = "cross-origin"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "SAMEORIGIN"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
